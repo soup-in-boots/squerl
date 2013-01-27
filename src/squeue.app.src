@@ -1,0 +1,12 @@
+{application, squeue,
+ [
+  {description, ""},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]},
+  {mod, { squeue_app, []}},
+  {env, []}
+ ]}.
