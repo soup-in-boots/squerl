@@ -28,6 +28,7 @@ class SQueue {
 //        static ERL_NIF_TERM PushFront(ErlNifEnv *caller, const std::string &name, const ERL_NIF_TERM &value);
 
         static ERL_NIF_TERM Pop(ErlNifEnv *caller, const std::string &name);
+        static ERL_NIF_TERM BlockPop(ErlNifEnv *caller, const std::string &name, const ERL_NIF_TERM &self);
         static ERL_NIF_TERM Push(ErlNifEnv *caller, const std::string &name, ERL_NIF_TERM value);
 
         static SQueue* GetQueue(const std::string &name);
@@ -58,44 +59,105 @@ class SQueue {
         SQueue();
         ~SQueue();
 
-        void push(const ERL_NIF_TERM &v) {
+        void push(ErlNifEnv *caller, const ERL_NIF_TERM &v) {
             Node *tmp = new Node( new Term(v) );
+
             enif_mutex_lock(tl_lock);
-            last->next = tmp;
-            last = tmp;
-            enif_mutex_unlock(tl_lock);
+
+            Node *fb = first_blocker;
+            Node *nb = fb->next.load(std::memory_order_acquire);
+
+            if (nb != nullptr) {
+                // Pop blocker; move blocker hd
+                Term *blocker = nb->term;
+                nb->term = nullptr;
+                first_blocker = nb;
+                enif_mutex_unlock(tl_lock);
+
+                // Send message
+                send_term(caller, blocker, tmp->term);
+
+                // Release related values
+                delete blocker;
+                delete fb;
+                delete tmp;
+            } else {
+                last_term->next = tmp;
+                last_term = tmp;
+                enif_mutex_unlock(tl_lock);
+            }
+        }
+
+        void send_term(ErlNifEnv *caller, Term *blocker, Term *msg) {
+            ErlNifPid target;
+            enif_get_local_pid(blocker->env, blocker->term, &target);
+            msg->term = enif_make_tuple2(msg->env, enif_make_atom(msg->env, "$squeue_bpop_response"), msg->term); 
+            enif_send(caller, &target, msg->env, msg->term);
         }
         
-        ERL_NIF_TERM pop(ErlNifEnv *dest) {
+        ERL_NIF_TERM pop(ErlNifEnv *caller) {
             ERL_NIF_TERM ret;
 
             enif_mutex_lock(hd_lock);
 
-            Node* hd = first;
-            Node* nx = first->next;
+            Node* hd = first_term;
+            Node* nx = first_term->next.load(std::memory_order_acquire);
 
             if (nx != nullptr) {
                 Term* v = nx->term;
                 nx->term = nullptr;
-                first = nx;
+                first_term = nx;
                 enif_mutex_unlock(hd_lock);
                 
-                ret = enif_make_copy(dest, v->term);
+                ret = enif_make_copy(caller, v->term);
                 delete(v);
                 delete(hd);
             } else {
                 enif_mutex_unlock(hd_lock);
-                ret = enif_make_atom(dest, "empty");
+                ret = enif_make_atom(caller, "empty");
             }
 
             return ret;
         }
 
-        Node *first;
-        Node *last;
+        ERL_NIF_TERM block_pop(ErlNifEnv *caller, const ERL_NIF_TERM &self) {
+            Node *tmp = new Node(new Term(self));
+            ERL_NIF_TERM ret;
 
-        ErlNifMutex *hd_lock;
-        ErlNifMutex *tl_lock;
+            enif_mutex_lock(hd_lock);
+
+            Node *f = first_term;
+            Node *n = first_term->next.load(std::memory_order_acquire);
+            
+            if (n != nullptr) {
+                Term *v = n->term;
+                n->term = nullptr;
+                first_term = n;
+                enif_mutex_unlock(hd_lock);
+
+                ret = enif_make_tuple2(caller, enif_make_atom(caller, "$squeue_bpop_response"), enif_make_copy(caller, v->term));
+                delete v;
+                delete f;
+                delete tmp;
+            } else {
+                last_blocker->next = tmp;
+                last_blocker = tmp;
+                enif_mutex_unlock(hd_lock);
+
+                ret = enif_make_atom(caller, "$squeue_bpop_wait");
+            }
+
+            return ret;
+        }
+
+        Node *first_term;
+        Node *last_term;
+
+        Node *first_blocker;
+        Node *last_blocker;
+
+        ErlNifMutex *hd_lock;       // Protects hd(terms) and tl(blockers)
+        ErlNifMutex *tl_lock;       // Protects tl(terms) and hd(blockers)
 };
 
 #endif

@@ -1,6 +1,6 @@
 -module(squeue).
 
--export([new/1, push/2, pop/1]).
+-export([new/1, push/2, pop/1, block_pop/1, block_pop/2]).
 
 -on_load(init/0).
 
@@ -30,6 +30,31 @@ push(_Name, _Value) ->
     ?nif_stub.
 
 pop(_Name) ->
+    ?nif_stub.
+
+block_pop(Name) ->
+    block_pop(Name, 5000).
+
+block_pop(Name, Timeout) ->
+    block_pop(Name, self(), Timeout).
+
+block_pop(Name, Self, Timeout) ->
+    case do_bpop(Name, Self) of
+        '$squeue_bpop_wait' ->
+            wait_for_bpop(Timeout);
+        {'$squeue_bpop_repsonse', V} ->
+            V
+    end.
+
+wait_for_bpop(Timeout) ->
+    receive
+        {'$squeue_bpop_response', V} -> V
+    after
+        Timeout ->
+            error(timeout)
+    end.
+
+do_bpop(_Name, _Self) ->
     ?nif_stub.
 
 %% ===================================================================

@@ -11,15 +11,24 @@ void SQueue::Shutdown() {
     enif_rwlock_destroy(queue_lock);
 }
 
-SQueue::SQueue() : first(NULL), last(NULL), hd_lock(NULL), tl_lock(NULL) {
-    first = last = new Node();
+SQueue::SQueue() : first_term(NULL), last_term(NULL), hd_lock(NULL), tl_lock(NULL) {
+    first_term = last_term = new Node();
+    first_blocker = last_blocker = new Node();
     hd_lock = enif_mutex_create("squeue_hd_lock");
     tl_lock = enif_mutex_create("squeue_tl_lock");
 }
 
 SQueue::~SQueue() {
-    Node *it = first;
+    Node *it = first_term;
     Node *tmp = nullptr;
+    while (it != nullptr) {
+        tmp = it;
+        it = it->next;
+        delete tmp;
+    }
+
+    it = first_blocker;
+    tmp = nullptr;
     while (it != nullptr) {
         tmp = it;
         it = it->next;
@@ -67,7 +76,7 @@ ERL_NIF_TERM SQueue::Push(ErlNifEnv *caller, const std::string &name, ERL_NIF_TE
         return enif_make_badarg(caller);
     }
     
-    queue->push(value);
+    queue->push(caller, value);
 
     return enif_make_atom(caller, "ok");
 }
@@ -82,6 +91,20 @@ ERL_NIF_TERM SQueue::Pop(ErlNifEnv *caller, const std::string &name) {
     }
 
     ret = queue->pop(caller);
+
+    return ret;
+}
+
+ERL_NIF_TERM SQueue::BlockPop(ErlNifEnv *caller, const std::string &name, const ERL_NIF_TERM &self) {
+    SQueue *queue;
+    ERL_NIF_TERM ret;
+    
+    queue = GetQueue(name);
+    if (queue == NULL) {
+        return enif_make_badarg(caller);
+    }
+
+    ret = queue->block_pop(caller, self);
 
     return ret;
 }
