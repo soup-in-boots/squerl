@@ -2,7 +2,7 @@
 -export([start_link/4]).
 -export([init/1]).
 -define(GET_VALUE, binary_to_list(crypto:rand_bytes(32))).
--define(FLUSH_COUNT, 1000).
+-define(FLUSH_COUNT, 1).
 
 start_link(Sup, Utils, ManageTid, WorkTid) ->
     Ret = proc_lib:start_link(?MODULE, init, [[Sup, Utils, ManageTid, WorkTid]]),
@@ -18,10 +18,11 @@ main_loop(Utils, ManageTid, WorkTid, ?FLUSH_COUNT) ->
     main_loop(Utils, ManageTid, WorkTid, 0);
 main_loop(Utils, ManageTid, WorkTid, Count) ->
     case crypto:rand_uniform(1, 1001) of
+        N when N =< 10 ->
+            catch Utils:block_pop(WorkTid, 5000);
         N when N =< 400 ->
             Utils:push(WorkTid, ?GET_VALUE);
         _ ->
             Utils:pop(WorkTid)
     end,
-    erlang:garbage_collect(),
     main_loop(Utils, ManageTid, WorkTid, Count + 1).
